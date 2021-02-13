@@ -1,0 +1,11 @@
+version: '3.4'
+
+services:
+  vac-alert-bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/usr/src/app/data
+
+volumes:
+  data:

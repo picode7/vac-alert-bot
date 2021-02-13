@@ -1,0 +1,52 @@
+name: Deploy Docker
+
+on:
+  push:
+    branches:
+      - main
+  create:
+    tags:
+      - v*
+
+jobs:
+  push_to_registry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+      - name: Login to GitHub Container Registry
+        run: |
+          # new login with new container registry url and PAT
+          echo ${{ secrets.CR_PAT }} | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
+
+      - name: Build Docker Image
+        run: |
+          docker build -t docker_image --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" .
+
+      - name: Push to GitHub Container Registry
+        run: |
+          IMAGE_ID=ghcr.io/${{ github.repository }}
+
+          # Change all uppercase to lowercase
+          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,') 
+
+          # If we there is a version tag publish an image with version tag
+          if [[ "${{ github.ref }}" == "refs/tags/"* ]]; then
+            VERSION=$(echo $VERSION | sed -e 's/^v//')
+            docker tag docker_image $IMAGE_ID:$VERSION
+            docker push $IMAGE_ID:$VERSION
+            docker tag docker_image $IMAGE_ID:latest
+            docker push $IMAGE_ID:latest
+          else
+            if [ "$VERSION" = "main" ]; then
+              # Use for main branch use `latest` tag convention
+              docker tag docker_image $IMAGE_ID:latest
+              docker push $IMAGE_ID:latest
+            else
+              # For other branches use branch as tag
+              docker tag docker_image $IMAGE_ID:$VERSION
+              docker push $IMAGE_ID:$VERSION
+            fi
+          fi
