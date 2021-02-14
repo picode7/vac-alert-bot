@@ -6,7 +6,25 @@ Telegram bot checking for vaccine appointments.
 
 From the container registry:
 
-- `docker run --name vac-bot -e TELEGRAM_TOKEN=... --restart unless-stopped -d ghcr.io/picode7/vac-alert-bot`
+- `docker-compose.yml`:
+
+  ```yml
+  version: '3.4'
+
+  services:
+    vac-alert-bot:
+      image: ghcr.io/picode7/vac-alert-bot
+      environment:
+        TELEGRAM_TOKEN: '...'
+      restart: unless-stopped
+      volumes:
+        - ./data:/usr/src/app/data
+
+  volumes:
+    data:
+  ```
+
+- Run `docker-compose up -d`
 
 or local:
 
