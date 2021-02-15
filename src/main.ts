@@ -83,13 +83,28 @@ const status = (msg: TelegramBot.Message) => {
   }
 }
 
+const check = (msg: TelegramBot.Message) => {
+  log('Manual check for appointments ...', JSON.stringify(msg.chat))
+  checkAll((msgText) => {
+    bot.sendMessage(msg.chat.id, msgText)
+  })
+}
+
 // Create a bot that uses 'polling' to fetch new updates
 const bot = new TelegramBot(token, { polling: true })
+
+bot.setMyCommands([
+  { command: 'start', description: 'Activate the bot' },
+  { command: 'stop', description: 'Deactivate the bot' },
+  { command: 'status', description: 'Get the status of the bot' },
+  { command: 'check', description: 'Check for available appointments now' },
+])
 bot.onText(/\/start */, activateBot)
 bot.onText(/\/activate */, activateBot)
 bot.onText(/\/stop */, deactivateBot)
 bot.onText(/\/deactivate */, deactivateBot)
 bot.onText(/\/status */, status)
+bot.onText(/\/check */, check)
 
 function broadcast(markdown: string) {
   for (const chat of activeChats) {
@@ -97,21 +112,26 @@ function broadcast(markdown: string) {
   }
 }
 
-function checkAll() {
-  log('Checking all ...')
+function checkAll(noAppointmentCallback?: (msgText: string) => void) {
   for (const location of locations) {
-    checkLocation(location)
+    checkLocation(location, noAppointmentCallback)
   }
 }
 
 function init() {
   checkAll()
-  setInterval(() => checkAll(), 1000 * 60 * CHECK_MINUTES)
+  setInterval(() => {
+    log('Automatically checking all ...')
+    checkAll()
+  }, 1000 * 60 * CHECK_MINUTES)
 }
 
 init()
 
-function checkLocation({ agenda_ids, name }: { agenda_ids: number; name: string }) {
+function checkLocation(
+  { agenda_ids, name }: { agenda_ids: number; name: string },
+  noAppointmentCallback?: (msgText: string) => void
+) {
   const url = new URL('https://partners.doctolib.fr/availabilities.json')
   url.searchParams.append('start_date', formatDate(new Date()))
   url.searchParams.append('visit_motive_ids', MOTIVE_VAC.toString())
@@ -139,10 +159,16 @@ function checkLocation({ agenda_ids, name }: { agenda_ids: number; name: string 
           )
           setPrevSuccess(name)
         } else {
-          log('old appointments for', name, ':', JSON.stringify(result))
+          if (noAppointmentCallback)
+            noAppointmentCallback(
+              `Looks like there are appointments for "${name}", which where already notified. \n[Click here to get to the website](https://partners.doctolib.fr/centre-de-vaccinations-internationales/limousin/vaccination-covid-19-professionnels-de-sante?pid=practice-162612&enable_cookies_consent=1) - ⚠ you will have to pick the location and motive manually!`
+            )
+          log('old appointments for', name, url.href, JSON.stringify(result))
         }
       } else {
-        log('no appointments for', name, ':', JSON.stringify(result))
+        log('no appointments for', name, url.href, JSON.stringify(result))
+        if (noAppointmentCallback) noAppointmentCallback(`Looks like there are no appointments for "${name}".`)
+        resetPrevSuccess(name)
       }
     })
   })
@@ -152,6 +178,15 @@ function getPrevSuccess(locationName: string) {
   const lastSuccess = lastSuccesses.find((v) => v.locationName == locationName)
   return (lastSuccess?.time ?? 0) + 1000 * 60 * 60 * 24 < Date.now()
 }
+
+function resetPrevSuccess(locationName: string) {
+  const index = lastSuccesses.findIndex((v) => v.locationName == locationName)
+  if (index != -1) {
+    lastSuccesses.splice(index, 1)
+  }
+  backup()
+}
+
 function setPrevSuccess(locationName: string) {
   const time = Date.now()
   const lastSuccess = lastSuccesses.find((v) => v.locationName == locationName)
