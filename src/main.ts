@@ -5,6 +5,12 @@ import * as fetch from 'node-fetch'
 require('dotenv').config()
 import TelegramBot = require('node-telegram-bot-api')
 
+// Remembers active chats with groups and private persons
+// Runs every CHECK_MINUTES
+// Doesn't run without active chats
+// Notifies when there is a new appointments,
+// doesn't then for 24h for the given slot, unless no slots are available at a check in between
+
 const token = process.env.TELEGRAM_TOKEN
 if (!token) throw 'TELEGRAM_TOKEN is undefined'
 
@@ -17,6 +23,8 @@ const locations = [
 ]
 
 const logFileName = `data/logs/${new Date().toISOString().replace(/:/g, '-')} log.txt`
+const saveFileName = path.join('data/data.json')
+
 fs.mkdirSync(path.dirname(logFileName), { recursive: true })
 const logFile = fs.createWriteStream(logFileName, { flags: 'w' })
 function log(...values: any[]) {
@@ -25,10 +33,9 @@ function log(...values: any[]) {
   logFile.write(util.format(text + '\n'))
 }
 
-const backupFile = path.join('data/data.json')
 let data = null
 try {
-  data = JSON.parse(fs.readFileSync(backupFile, 'utf-8'))
+  data = JSON.parse(fs.readFileSync(saveFileName, 'utf-8'))
 } catch (e) {}
 
 let activeChats: TelegramBot.Chat[] = []
@@ -37,17 +44,20 @@ if (data?.activeChats) activeChats = data.activeChats
 let lastSuccesses: { locationName: string; time: number }[] = []
 if (data?.lastSuccesses) lastSuccesses = data.lastSuccesses
 
-function backup() {
-  fs.mkdirSync(path.dirname(backupFile), { recursive: true })
-  fs.writeFileSync(backupFile, JSON.stringify({ activeChats, lastSuccesses }))
+function save() {
+  fs.mkdirSync(path.dirname(saveFileName), { recursive: true })
+  fs.writeFileSync(saveFileName, JSON.stringify({ activeChats, lastSuccesses }))
 }
-backup()
+save()
+
+// Bot Logic
 
 const activateBot = (msg: TelegramBot.Message) => {
   if (activeChats.find((v) => v.id === msg.chat.id) === undefined) {
     activeChats.push(msg.chat)
+    if (activeChats.length == 1) startChecking()
     log('activated chat', JSON.stringify(msg.chat))
-    backup()
+    save()
     bot.sendMessage(msg.chat.id, '🟢 Vaccine Bot Activated 💉🤖🔥')
     bot.sendMessage(
       msg.chat.id,
@@ -64,8 +74,9 @@ const deactivateBot = (msg: TelegramBot.Message) => {
   const index = activeChats.findIndex((v) => v.id === msg.chat.id)
   if (index != -1) {
     activeChats.splice(index, 1)
+    if (activeChats.length == 0) stopChecking()
     log('deactivated chat', JSON.stringify(msg.chat))
-    backup()
+    save()
     bot.sendMessage(msg.chat.id, '🔴 Vaccine Bot Deactivated')
   }
 }
@@ -90,9 +101,13 @@ const check = (msg: TelegramBot.Message) => {
   })
 }
 
-// Create a bot that uses 'polling' to fetch new updates
-const bot = new TelegramBot(token, { polling: true })
+function broadcast(markdown: string) {
+  for (const chat of activeChats) {
+    bot.sendMessage(chat.id, markdown, { parse_mode: 'Markdown' })
+  }
+}
 
+const bot = new TelegramBot(token, { polling: true })
 bot.setMyCommands([
   { command: 'start', description: 'Activate the bot' },
   { command: 'stop', description: 'Deactivate the bot' },
@@ -106,9 +121,24 @@ bot.onText(/\/deactivate */, deactivateBot)
 bot.onText(/\/status */, status)
 bot.onText(/\/check */, check)
 
-function broadcast(markdown: string) {
-  for (const chat of activeChats) {
-    bot.sendMessage(chat.id, markdown, { parse_mode: 'Markdown' })
+// Checking Logic
+
+let checkingInterval: NodeJS.Timeout | undefined
+
+function startChecking() {
+  checkAll()
+  if (checkingInterval) clearInterval(checkingInterval)
+  checkingInterval = setInterval(() => {
+    log('Automatically checking all ...')
+    checkAll()
+  }, 1000 * 60 * CHECK_MINUTES)
+}
+if (activeChats.length > 0) startChecking()
+
+function stopChecking() {
+  if (checkingInterval) {
+    clearInterval(checkingInterval)
+    checkingInterval = undefined
   }
 }
 
@@ -117,16 +147,6 @@ function checkAll(noAppointmentCallback?: (msgText: string) => void) {
     checkLocation(location, noAppointmentCallback)
   }
 }
-
-function init() {
-  checkAll()
-  setInterval(() => {
-    log('Automatically checking all ...')
-    checkAll()
-  }, 1000 * 60 * CHECK_MINUTES)
-}
-
-init()
 
 function checkLocation(
   { agenda_ids, name }: { agenda_ids: number; name: string },
@@ -184,7 +204,7 @@ function resetPrevSuccess(locationName: string) {
   if (index != -1) {
     lastSuccesses.splice(index, 1)
   }
-  backup()
+  save()
 }
 
 function setPrevSuccess(locationName: string) {
@@ -195,7 +215,7 @@ function setPrevSuccess(locationName: string) {
   } else {
     lastSuccess.time = time
   }
-  backup()
+  save()
 }
 
 function formatDate(d: Date) {
